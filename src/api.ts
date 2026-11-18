@@ -29,6 +29,7 @@ export class MetabaseApiClient {
   private apiKey: string | null = null;
   private authMethod: AuthMethod;
   private runtimeCredentials: RuntimeCredentials | null = null;
+  private onSessionExpired: (() => void) | null = null;
   private headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
@@ -49,11 +50,26 @@ export class MetabaseApiClient {
   private readonly CACHE_TTL_MS: number;
   private readonly REQUEST_TIMEOUT_MS: number;
 
-  constructor(credentials?: RuntimeCredentials) {
+  /**
+   * Pass `existingSession` to act as a user who already logged in to Metabase in a browser
+   * (OAuth mode). The client never sees a password; when Metabase rejects the session it calls
+   * `existingSession.onExpired` and fails the request instead of logging in again.
+   */
+  constructor(
+    credentials?: RuntimeCredentials,
+    existingSession?: { sessionToken: string; onExpired: () => void }
+  ) {
     this.baseUrl = config.METABASE_URL;
     this.runtimeCredentials = credentials ?? null;
-    this.authMethod = config.METABASE_API_KEY ? AuthMethod.API_KEY : AuthMethod.SESSION;
-    this.apiKey = config.METABASE_API_KEY || null;
+    if (existingSession) {
+      this.sessionToken = existingSession.sessionToken;
+      this.onSessionExpired = existingSession.onExpired;
+      this.authMethod = AuthMethod.SESSION;
+      this.apiKey = null;
+    } else {
+      this.authMethod = config.METABASE_API_KEY ? AuthMethod.API_KEY : AuthMethod.SESSION;
+      this.apiKey = config.METABASE_API_KEY || null;
+    }
     this.CACHE_TTL_MS = config.CACHE_TTL_MS;
     this.REQUEST_TIMEOUT_MS = config.REQUEST_TIMEOUT_MS;
 
@@ -189,6 +205,14 @@ export class MetabaseApiClient {
           this.authMethod === AuthMethod.SESSION &&
           path !== '/api/session'
         ) {
+          if (this.onSessionExpired) {
+            this.sessionToken = null;
+            this.onSessionExpired();
+            throw new McpError(
+              ErrorCode.InvalidRequest,
+              'Metabase session expired. Log in to Metabase again to continue.'
+            );
+          }
           this.sessionToken = null;
           const freshToken = await this.getSessionToken();
           const retryHeaders = { ...headers, 'X-Metabase-Session': freshToken };

@@ -34,6 +34,9 @@ const envSchema = z.object({
   METABASE_API_KEY: z.string().optional(),
   METABASE_USER_EMAIL: z.string().email().optional(),
   METABASE_PASSWORD: z.string().min(1).optional(),
+  // Public URL of this server on the Metabase origin, for example https://metabase.example.com/mcp.
+  // Setting it turns on OAuth mode: users log in through Metabase and no password reaches the MCP.
+  OAUTH_PUBLIC_URL: z.string().url().optional(),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error', 'fatal']).default('info'),
   CACHE_TTL_MS: z
@@ -72,6 +75,7 @@ function createTestConfig() {
     METABASE_API_KEY: 'test-api-key',
     METABASE_USER_EMAIL: undefined,
     METABASE_PASSWORD: undefined,
+    OAUTH_PUBLIC_URL: undefined as string | undefined,
     NODE_ENV: 'test' as const,
     LOG_LEVEL: 'info' as const,
     CACHE_TTL_MS: 600000,
