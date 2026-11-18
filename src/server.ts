@@ -1,4 +1,4 @@
-import { createServer } from 'node:http';
+import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -16,7 +16,12 @@ import {
   isInitializeRequest,
   type CallToolRequest,
 } from '@modelcontextprotocol/sdk/types.js';
+import { authorizationHandler } from '@modelcontextprotocol/sdk/server/auth/handlers/authorize.js';
+import { tokenHandler } from '@modelcontextprotocol/sdk/server/auth/handlers/token.js';
+import { clientRegistrationHandler } from '@modelcontextprotocol/sdk/server/auth/handlers/register.js';
+import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { LogLevel } from './config.js';
+import { MetabaseSessionOAuthProvider } from './oauth.js';
 import { generateRequestId } from './utils/index.js';
 // Note: ApiError and isMcpError removed - errors are caught and returned, not type-checked
 import { MetabaseApiClient } from './api.js';
@@ -44,6 +49,9 @@ export class MetabaseServer {
   private server: Server;
   private apiClient: MetabaseApiClient;
   private sessionClients: Map<string, MetabaseApiClient> = new Map();
+  // OAuth mode: one client per Metabase session, so each user's cache and permissions stay separate.
+  private oauthClients: Map<string, MetabaseApiClient> = new Map();
+  private oauthProvider: MetabaseSessionOAuthProvider | null = null;
 
   constructor() {
     this.server = new Server(
@@ -184,6 +192,21 @@ export class MetabaseServer {
   /**
    * Set up tool handlers
    */
+  private getClientForOAuthSession(metabaseSession: string): MetabaseApiClient {
+    let client = this.oauthClients.get(metabaseSession);
+    if (!client) {
+      client = new MetabaseApiClient(undefined, {
+        sessionToken: metabaseSession,
+        onExpired: () => {
+          this.oauthClients.delete(metabaseSession);
+          this.oauthProvider?.revokeMetabaseSession(metabaseSession);
+        },
+      });
+      this.oauthClients.set(metabaseSession, client);
+    }
+    return client;
+  }
+
   private getClientForSession(sessionId: string): MetabaseApiClient {
     const sessionClient = this.sessionClients.get(sessionId);
     if (sessionClient) {
@@ -203,6 +226,7 @@ export class MetabaseServer {
     server.setRequestHandler(ListToolsRequestSchema, async () => {
       this.logInfo('Processing request to list available tools');
       return {
+        // In OAuth mode users log in through the browser, so the password tool must not exist.
         tools: [
           {
             name: 'metabase_authenticate',
@@ -951,13 +975,16 @@ export class MetabaseServer {
               required: ['collection_id'],
             },
           },
-        ],
+        ].filter(tool => !(this.oauthProvider && tool.name === 'metabase_authenticate')),
       };
     });
 
     server.setRequestHandler(
       CallToolRequestSchema,
-      async (request: CallToolRequest, extra: { sessionId?: string }) => {
+      async (
+        request: CallToolRequest,
+        extra: { sessionId?: string; authInfo?: { extra?: Record<string, unknown> } }
+      ) => {
         const toolName = request.params?.name || 'unknown';
         const requestId = generateRequestId();
         const sessionId = extra?.sessionId ?? 'default';
@@ -992,7 +1019,11 @@ export class MetabaseServer {
           });
         }
 
-        const client = this.getClientForSession(sessionId);
+        const metabaseSession = extra?.authInfo?.extra?.metabaseSession;
+        const client =
+          this.oauthProvider && typeof metabaseSession === 'string'
+            ? this.getClientForOAuthSession(metabaseSession)
+            : this.getClientForSession(sessionId);
         await client.getSessionToken();
 
         switch (request.params?.name) {
@@ -1167,20 +1198,67 @@ export class MetabaseServer {
       // One transport (and one Server) per client session, keyed by session UUID.
       const httpTransports = new Map<string, StreamableHTTPServerTransport>();
 
-      const httpServer = createServer(async (req, res) => {
-        if (!req.url?.startsWith('/mcp')) {
-          res.writeHead(404, { 'Content-Type': 'text/plain' });
-          res.end('Not found');
-          return;
-        }
+      const app = express();
+      app.disable('x-powered-by');
 
-        const chunks: Buffer[] = [];
-        for await (const chunk of req) {
-          chunks.push(chunk as Buffer);
-        }
-        const rawBody = Buffer.concat(chunks).toString();
-        const body = rawBody ? JSON.parse(rawBody) : undefined;
+      // OAuth mode: every /mcp request needs a token from the Metabase browser login.
+      let mcpAuth: express.RequestHandler = (_req, _res, next) => next();
+      if (config.OAUTH_PUBLIC_URL) {
+        const publicUrl = new URL(config.OAUTH_PUBLIC_URL);
+        const provider = new MetabaseSessionOAuthProvider(config.METABASE_URL, publicUrl);
+        this.oauthProvider = provider;
+        provider.onSessionRevoked = metabaseSession => {
+          this.oauthClients.delete(metabaseSession);
+        };
+        const base = publicUrl.pathname.replace(/\/$/, '');
+        const endpoint = (path: string) => new URL(`${base}${path}`, publicUrl).href;
+        const resourceMetadataUrl = new URL(
+          `/.well-known/oauth-protected-resource${base}`,
+          publicUrl
+        ).href;
 
+        // Same document served at the path-aware (RFC 8414) and root discovery URLs.
+        const authorizationServerMetadata = {
+          issuer: publicUrl.href.replace(/\/$/, ''),
+          authorization_endpoint: endpoint('/authorize'),
+          token_endpoint: endpoint('/token'),
+          registration_endpoint: endpoint('/register'),
+          response_types_supported: ['code'],
+          code_challenge_methods_supported: ['S256'],
+          token_endpoint_auth_methods_supported: ['none'],
+          grant_types_supported: ['authorization_code', 'refresh_token'],
+        };
+        const protectedResourceMetadata = {
+          resource: publicUrl.href.replace(/\/$/, ''),
+          authorization_servers: [authorizationServerMetadata.issuer],
+          resource_name: 'Metabase MCP',
+        };
+        app.get(`/.well-known/oauth-authorization-server${base}`, (_req, res) => {
+          res.json(authorizationServerMetadata);
+        });
+        app.get('/.well-known/oauth-authorization-server', (_req, res) => {
+          res.json(authorizationServerMetadata);
+        });
+        app.get(`/.well-known/oauth-protected-resource${base}`, (_req, res) => {
+          res.json(protectedResourceMetadata);
+        });
+
+        app.use(`${base}/authorize/confirm`, express.urlencoded({ extended: false }));
+        app.post(`${base}/authorize/confirm`, (req, res, next) => {
+          provider.confirm(req, res).catch(next);
+        });
+        app.use(`${base}/authorize`, authorizationHandler({ provider }));
+        app.use(`${base}/token`, tokenHandler({ provider }));
+        app.use(
+          `${base}/register`,
+          clientRegistrationHandler({ clientsStore: provider.clientsStore })
+        );
+        mcpAuth = requireBearerAuth({ verifier: provider, resourceMetadataUrl });
+        this.logInfo(`OAuth mode enabled, issuer ${authorizationServerMetadata.issuer}`);
+      }
+
+      app.all('/mcp', mcpAuth, express.json({ limit: '10mb' }), async (req, res) => {
+        const body = req.body && Object.keys(req.body).length > 0 ? req.body : undefined;
         const sessionId = req.headers['mcp-session-id'];
 
         if (typeof sessionId === 'string' && httpTransports.has(sessionId)) {
@@ -1191,7 +1269,7 @@ export class MetabaseServer {
           const sessionServer = this.createMcpServer();
           const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
-            onsessioninitialized: (sid) => {
+            onsessioninitialized: sid => {
               httpTransports.set(sid, transport);
             },
           });
@@ -1205,19 +1283,20 @@ export class MetabaseServer {
           await sessionServer.connect(transport);
           await transport.handleRequest(req, res, body);
         } else {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(
-            JSON.stringify({
-              jsonrpc: '2.0',
-              error: { code: -32000, message: 'Bad Request: No valid session ID provided' },
-              id: null,
-            })
-          );
+          res.status(400).json({
+            jsonrpc: '2.0',
+            error: { code: -32000, message: 'Bad Request: No valid session ID provided' },
+            id: null,
+          });
         }
       });
 
+      app.use((_req, res) => {
+        res.status(404).type('text/plain').send('Not found');
+      });
+
       await new Promise<void>((resolve, reject) => {
-        httpServer.listen(port, '0.0.0.0', () => {
+        const httpServer = app.listen(port, '0.0.0.0', () => {
           this.logInfo(`Metabase MCP server running on HTTP port ${port}`);
           resolve();
         });
