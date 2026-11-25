@@ -35,6 +35,7 @@ RUN mkdir -p /home/node/exports && chown node:node /home/node/exports
 ENV NODE_ENV=production \
     LOG_LEVEL=info \
     EXPORT_DIRECTORY=/home/node/exports \
+    EXPORT_TTL_MS=1800000 \
     METABASE_READ_ONLY_MODE=true
 
 # Use non-root user for better security

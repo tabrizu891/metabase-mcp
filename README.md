@@ -92,7 +92,7 @@ Or build locally: `docker build -t metabase-mcp .` and use `metabase-mcp` as the
 
 **Required flags:** `-i` (interactive, for MCP stdio), `--rm` (cleanup), `--init` (signal handling)
 
-**Environment variables:** Pass via `-e` flags. See [Manual Configuration](#option-2-manual-configuration) for all options. Docker defaults: `LOG_LEVEL=info`, `METABASE_READ_ONLY_MODE=true`, `EXPORT_DIRECTORY=/home/node/exports`.
+**Environment variables:** Pass via `-e` flags. See [Manual Configuration](#option-2-manual-configuration) for all options. Docker defaults: `LOG_LEVEL=info`, `METABASE_READ_ONLY_MODE=true`, `EXPORT_DIRECTORY=/home/node/exports`, `EXPORT_TTL_MS=1800000`.
 
 ## Available Tools
 
@@ -124,7 +124,7 @@ Export large datasets up to 1M rows.
 - **SQL Mode**: Export custom query results
 - **Card Mode**: Export saved card results with optional filtering
 - **Local (stdio)**: writes the file to `EXPORT_DIRECTORY` (default `~/Downloads/Metabase`) and returns `file_path`.
-- **HTTP (`OAUTH_PUBLIC_URL` set)**: stores the file on the server and returns `download_url`. The link expires after 15 minutes. A remote process cannot write into the user's Downloads folder.
+- **HTTP (`OAUTH_PUBLIC_URL` set)**: stores the file on the server and returns `download_url`. The link expires after `EXPORT_TTL_MS` (default 30 minutes). A remote process cannot write into the user's Downloads folder.
 
 ### `clear_cache`
 Clear internal cache with granular control.

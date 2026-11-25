@@ -470,7 +470,7 @@ export class MetabaseServer {
           {
             name: 'export',
             description: config.OAUTH_PUBLIC_URL
-              ? 'Unified command to export large SQL query results or saved cards using Metabase export endpoints (supports up to 1M rows). Returns CSV, JSON, or XLSX as a short-lived download_url. The link is the only way to get the file. It expires after 15 minutes and is not written to the user Downloads folder.'
+              ? `Unified command to export large SQL query results or saved cards using Metabase export endpoints (supports up to 1M rows). Returns CSV, JSON, or XLSX as a short-lived download_url. The link is the only way to get the file. It expires after ${config.EXPORT_TTL_MS / 60000} minutes and is not written to the user Downloads folder.`
               : 'Unified command to export large SQL query results or saved cards using Metabase export endpoints (supports up to 1M rows). Returns data in specified format (CSV, JSON, or XLSX) and automatically saves to Downloads/Metabase folder.',
             annotations: {
               readOnlyHint: true,

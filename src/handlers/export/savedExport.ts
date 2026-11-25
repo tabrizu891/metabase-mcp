@@ -9,8 +9,7 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Response } from 'express';
-
-const EXPORT_TTL_MS = 15 * 60 * 1000;
+import { config } from '../../config.js';
 
 interface StoredExport {
   filePath: string;
@@ -86,13 +85,13 @@ export function saveExportFile(input: {
       filePath,
       downloadName: input.downloadName,
       contentType: contentTypeForFormat(input.format),
-      expiresAt: Date.now() + EXPORT_TTL_MS,
+      expiresAt: Date.now() + config.EXPORT_TTL_MS,
     });
     ensureSweeper();
     return {
       fileSize,
       downloadUrl: `${publicBaseUrl}/exports/${id}`,
-      expiresInSeconds: EXPORT_TTL_MS / 1000,
+      expiresInSeconds: config.EXPORT_TTL_MS / 1000,
     };
   }
 

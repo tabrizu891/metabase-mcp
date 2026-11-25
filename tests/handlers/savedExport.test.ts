@@ -4,6 +4,7 @@ import { join } from 'path';
 import { Writable } from 'stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Response } from 'express';
+import { config } from '../../src/config.js';
 import {
   exportLocationFields,
   resetExportDownloadsForTests,
@@ -52,13 +53,13 @@ describe('saveExportFile', () => {
     });
 
     expect(saved.filePath).toBeUndefined();
-    expect(saved.expiresInSeconds).toBe(900);
+    expect(saved.expiresInSeconds).toBe(config.EXPORT_TTL_MS / 1000);
     expect(saved.downloadUrl).toMatch(
       /^https:\/\/metabase\.example\.com\/mcp\/exports\/[0-9a-f-]{36}$/
     );
     expect(exportLocationFields(saved)).toEqual({
       download_url: saved.downloadUrl,
-      expires_in_seconds: 900,
+      expires_in_seconds: config.EXPORT_TTL_MS / 1000,
     });
 
     const id = saved.downloadUrl!.split('/').pop()!;
