@@ -119,11 +119,12 @@ Execute SQL queries or run saved cards with configurable row limits (default: 10
 - **Security**: Respects Read-Only Mode (blocks INSERT, UPDATE, DELETE, DROP, etc.)
 
 ### `export`
-Export large datasets up to 1M rows to the configured export directory.
+Export large datasets up to 1M rows.
 - **Formats**: CSV, JSON, XLSX
 - **SQL Mode**: Export custom query results
 - **Card Mode**: Export saved card results with optional filtering
-- **Note**: When using hosted remote deployments (e.g., Glama), exported files are saved inside the container and are inaccessible. Use `execute` for query results directly, or run locally via npx/Docker for full export functionality.
+- **Local (stdio)**: writes the file to `EXPORT_DIRECTORY` (default `~/Downloads/Metabase`) and returns `file_path`.
+- **HTTP (`OAUTH_PUBLIC_URL` set)**: stores the file on the server and returns `download_url`. The link expires after 15 minutes. A remote process cannot write into the user's Downloads folder.
 
 ### `clear_cache`
 Clear internal cache with granular control.
